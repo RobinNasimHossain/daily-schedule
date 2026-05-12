@@ -1,19 +1,14 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useAuth } from './hooks/useAuth'
+import AuthPage from './components/auth/AuthPage'
+import ProjectSelector from './components/ProjectSelector'
 import ProjectInfo from './components/ProjectInfo'
 import ProtectionForm from './components/ProtectionForm'
 import WorkSection from './components/WorkSection'
 import MaterialsList from './components/MaterialsList'
 import ScheduleView from './components/ScheduleView'
+import api from './services/api'
 import './App.css'
-
-const INITIAL_PROJECT = {
-  id: '',
-  company: '',
-  address: '',
-  lockCode: '',
-  date: '',
-  projectType: '',
-}
 
 const ROOM_CONFIGS = [
   {
@@ -121,6 +116,7 @@ const ROOM_CONFIGS = [
 ]
 
 const TABS = [
+  { key: 'projects', label: 'Projects' },
   { key: 'info', label: 'Project Info' },
   { key: 'protection', label: 'Protection' },
   { key: 'work', label: 'Work Schedule' },
@@ -142,6 +138,15 @@ function getInitialWorkData() {
   return data
 }
 
+const INITIAL_PROJECT = {
+  id: '',
+  company: '',
+  address: '',
+  lockCode: '',
+  date: '',
+  projectType: '',
+}
+
 const INITIAL_PROTECTION = {
   floorProtection: '',
   plywoodWalking: '',
@@ -150,34 +155,136 @@ const INITIAL_PROTECTION = {
 }
 
 const INITIAL_MATERIALS = [
-  { id: 1, name: 'Protection Pad', quantity: '', unit: 'pcs' },
-  { id: 2, name: 'Painter Tape', quantity: '', unit: 'rolls' },
-  { id: 3, name: 'Plywood', quantity: '', unit: 'sheets' },
-  { id: 4, name: 'PVC', quantity: '', unit: 'pcs' },
+  { name: 'Protection Pad', quantity: '', unit: 'pcs' },
+  { name: 'Painter Tape', quantity: '', unit: 'rolls' },
+  { name: 'Plywood', quantity: '', unit: 'sheets' },
+  { name: 'PVC', quantity: '', unit: 'pcs' },
 ]
 
-function loadState() {
-  try {
-    const saved = localStorage.getItem('renovation-schedule')
-    if (saved) return JSON.parse(saved)
-  } catch {
-    // ignore
-  }
-  return null
-}
-
 function App() {
-  const saved = loadState()
-  const [activeTab, setActiveTab] = useState('info')
-  const [project, setProject] = useState(saved?.project || INITIAL_PROJECT)
-  const [protection, setProtection] = useState(saved?.protection || INITIAL_PROTECTION)
-  const [workData, setWorkData] = useState(saved?.workData || getInitialWorkData())
-  const [materials, setMaterials] = useState(saved?.materials || INITIAL_MATERIALS)
+  const { user, loading: authLoading, logout } = useAuth()
+  const [activeTab, setActiveTab] = useState('projects')
+  const [projects, setProjects] = useState([])
+  const [activeProjectId, setActiveProjectId] = useState(null)
+  const [projectsLoading, setProjectsLoading] = useState(false)
+
+  const [project, setProject] = useState(INITIAL_PROJECT)
+  const [protection, setProtection] = useState(INITIAL_PROTECTION)
+  const [workData, setWorkData] = useState(getInitialWorkData())
+  const [materials, setMaterials] = useState(INITIAL_MATERIALS)
+  const [saving, setSaving] = useState(false)
+  const saveTimer = useRef(null)
+
+  // Load projects list
+  const loadProjects = useCallback(async () => {
+    setProjectsLoading(true)
+    try {
+      const data = await api.getProjects()
+      setProjects(data)
+    } catch {
+      // silent
+    } finally {
+      setProjectsLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    const state = { project, protection, workData, materials }
-    localStorage.setItem('renovation-schedule', JSON.stringify(state))
-  }, [project, protection, workData, materials])
+    if (!user) return
+    let cancelled = false
+    api.getProjects().then((data) => {
+      if (!cancelled) {
+        setProjects(data)
+        setProjectsLoading(false)
+      }
+    }).catch(() => {
+      if (!cancelled) setProjectsLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [user])
+
+  // Load active project data
+  const loadProject = useCallback(async (id) => {
+    try {
+      const p = await api.getProject(id)
+      setProject({
+        id: p.name || '',
+        company: p.company || '',
+        address: p.address || '',
+        lockCode: p.lockCode || '',
+        date: p.projectDate || '',
+        projectType: p.projectType || '',
+      })
+      setProtection(p.protection || INITIAL_PROTECTION)
+      setWorkData(Object.keys(p.workData || {}).length ? p.workData : getInitialWorkData())
+      setMaterials(p.materials?.length ? p.materials : INITIAL_MATERIALS)
+      setActiveProjectId(id)
+      setActiveTab('info')
+    } catch {
+      // silent
+    }
+  }, [])
+
+  // Auto-save with debounce
+  const saveProject = useCallback(async () => {
+    if (!activeProjectId) return
+    setSaving(true)
+    try {
+      await api.updateProject(activeProjectId, {
+        name: project.id,
+        company: project.company,
+        address: project.address,
+        lockCode: project.lockCode,
+        projectDate: project.date,
+        projectType: project.projectType,
+        protection,
+        workData,
+        materials,
+      })
+    } catch {
+      // silent
+    } finally {
+      setSaving(false)
+    }
+  }, [activeProjectId, project, protection, workData, materials])
+
+  useEffect(() => {
+    if (!activeProjectId) return
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => saveProject(), 1000)
+    return () => clearTimeout(saveTimer.current)
+  }, [project, protection, workData, materials, saveProject, activeProjectId])
+
+  const handleCreateProject = async (name) => {
+    try {
+      const p = await api.createProject({
+        name,
+        protection: INITIAL_PROTECTION,
+        workData: getInitialWorkData(),
+        materials: INITIAL_MATERIALS,
+      })
+      await loadProjects()
+      loadProject(p._id)
+    } catch {
+      // silent
+    }
+  }
+
+  const handleDeleteProject = async (id) => {
+    try {
+      await api.deleteProject(id)
+      if (activeProjectId === id) {
+        setActiveProjectId(null)
+        setProject(INITIAL_PROJECT)
+        setProtection(INITIAL_PROTECTION)
+        setWorkData(getInitialWorkData())
+        setMaterials(INITIAL_MATERIALS)
+        setActiveTab('projects')
+      }
+      await loadProjects()
+    } catch {
+      // silent
+    }
+  }
 
   const updateWork = (roomKey, fieldName, value) => {
     setWorkData((prev) => ({
@@ -186,14 +293,27 @@ function App() {
     }))
   }
 
-  const handleClearAll = () => {
-    if (window.confirm('Clear all data? This cannot be undone.')) {
+  const handleClearAll = async () => {
+    if (!activeProjectId) return
+    if (window.confirm('Clear all data for this project? This cannot be undone.')) {
       setProject(INITIAL_PROJECT)
       setProtection(INITIAL_PROTECTION)
       setWorkData(getInitialWorkData())
       setMaterials(INITIAL_MATERIALS)
-      localStorage.removeItem('renovation-schedule')
     }
+  }
+
+  if (authLoading) {
+    return (
+      <div className="app-loading">
+        <div className="spinner" />
+        <p>Loading...</p>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <AuthPage />
   }
 
   const stats = {
@@ -208,7 +328,10 @@ function App() {
       <header className="app-header">
         <div className="header-content">
           <h1>Renovation Daily Schedule</h1>
-          <p className="header-subtitle">Project Work Tracker</p>
+          <p className="header-subtitle">
+            Project Work Tracker
+            {saving && <span className="save-indicator"> — Saving...</span>}
+          </p>
         </div>
         <div className="header-stats">
           <div className="stat-card stat-total">
@@ -228,6 +351,10 @@ function App() {
             <span className="stat-label">Done</span>
           </div>
         </div>
+        <div className="header-user">
+          <span className="user-name">{user.fullName || user.username}</span>
+          <button className="btn-logout" onClick={logout}>Logout</button>
+        </div>
       </header>
 
       <nav className="tab-nav">
@@ -236,6 +363,7 @@ function App() {
             key={tab.key}
             className={`tab-btn ${activeTab === tab.key ? 'active' : ''}`}
             onClick={() => setActiveTab(tab.key)}
+            disabled={tab.key !== 'projects' && !activeProjectId}
           >
             {tab.label}
           </button>
@@ -243,15 +371,26 @@ function App() {
       </nav>
 
       <main className="main-content">
-        {activeTab === 'info' && (
+        {activeTab === 'projects' && (
+          <ProjectSelector
+            projects={projects}
+            activeProjectId={activeProjectId}
+            onSelect={loadProject}
+            onCreate={handleCreateProject}
+            onDelete={handleDeleteProject}
+            loading={projectsLoading}
+          />
+        )}
+
+        {activeTab === 'info' && activeProjectId && (
           <ProjectInfo project={project} setProject={setProject} />
         )}
 
-        {activeTab === 'protection' && (
+        {activeTab === 'protection' && activeProjectId && (
           <ProtectionForm protection={protection} setProtection={setProtection} />
         )}
 
-        {activeTab === 'work' && (
+        {activeTab === 'work' && activeProjectId && (
           <div className="work-sections">
             {ROOM_CONFIGS.map((room) => (
               <WorkSection
@@ -264,11 +403,11 @@ function App() {
           </div>
         )}
 
-        {activeTab === 'materials' && (
+        {activeTab === 'materials' && activeProjectId && (
           <MaterialsList materials={materials} setMaterials={setMaterials} />
         )}
 
-        {activeTab === 'view' && (
+        {activeTab === 'view' && activeProjectId && (
           <ScheduleView
             project={project}
             protection={protection}
@@ -280,10 +419,12 @@ function App() {
       </main>
 
       <footer className="app-footer">
-        <button className="btn-clear" onClick={handleClearAll}>
-          Clear All Data
-        </button>
-        <span className="footer-note">Data saved locally in your browser</span>
+        {activeProjectId && (
+          <button className="btn-clear" onClick={handleClearAll}>
+            Clear All Data
+          </button>
+        )}
+        <span className="footer-note">Data saved to server automatically</span>
       </footer>
     </div>
   )
