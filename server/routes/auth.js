@@ -47,6 +47,7 @@ router.post(
         },
       });
     } catch (err) {
+      console.error('Register error:', err);
       res.status(500).json({ message: 'Server error' });
     }
   }
