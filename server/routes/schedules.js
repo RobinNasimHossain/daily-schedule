@@ -3,16 +3,21 @@ import Schedule from '../models/Schedule.js'
 
 const router = express.Router()
 
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const { search, status, sort = '-createdAt', page = 1, limit = 20 } = req.query
     const query = {}
 
     if (search) {
+      const escaped = escapeRegex(search)
       query.$or = [
-        { 'project.id': { $regex: search, $options: 'i' } },
-        { 'project.company': { $regex: search, $options: 'i' } },
-        { 'project.address': { $regex: search, $options: 'i' } },
+        { 'project.id': { $regex: escaped, $options: 'i' } },
+        { 'project.company': { $regex: escaped, $options: 'i' } },
+        { 'project.address': { $regex: escaped, $options: 'i' } },
       ]
     }
 

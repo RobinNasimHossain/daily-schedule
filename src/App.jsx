@@ -161,10 +161,10 @@ const INITIAL_PROTECTION = {
 }
 
 const INITIAL_MATERIALS = [
-  { name: 'Protection Pad', quantity: '', unit: 'pcs' },
-  { name: 'Painter Tape', quantity: '', unit: 'rolls' },
-  { name: 'Plywood', quantity: '', unit: 'sheets' },
-  { name: 'PVC', quantity: '', unit: 'pcs' },
+  { id: 1, name: 'Protection Pad', quantity: '', unit: 'pcs' },
+  { id: 2, name: 'Painter Tape', quantity: '', unit: 'rolls' },
+  { id: 3, name: 'Plywood', quantity: '', unit: 'sheets' },
+  { id: 4, name: 'PVC', quantity: '', unit: 'pcs' },
 ]
 
 function normalizeWorkData(raw) {
