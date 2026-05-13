@@ -1,9 +1,17 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import ProjectInfo from './components/ProjectInfo'
 import ProtectionForm from './components/ProtectionForm'
 import WorkSection from './components/WorkSection'
 import MaterialsList from './components/MaterialsList'
 import ScheduleView from './components/ScheduleView'
+import ScheduleList from './components/ScheduleList'
+import {
+  fetchSchedules,
+  fetchSchedule,
+  createSchedule,
+  updateSchedule,
+  deleteSchedule,
+} from './api'
 import './App.css'
 
 const INITIAL_PROJECT = {
@@ -156,28 +164,214 @@ const INITIAL_MATERIALS = [
   { id: 4, name: 'PVC', quantity: '', unit: 'pcs' },
 ]
 
-function loadState() {
-  try {
-    const saved = localStorage.getItem('renovation-schedule')
-    if (saved) return JSON.parse(saved)
-  } catch {
-    // ignore
-  }
-  return null
-}
-
 function App() {
-  const saved = loadState()
+  const [view, setView] = useState('list')
+  const [schedules, setSchedules] = useState([])
+  const [currentId, setCurrentId] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(null)
+  const [dbConnected, setDbConnected] = useState(true)
+
   const [activeTab, setActiveTab] = useState('info')
-  const [project, setProject] = useState(saved?.project || INITIAL_PROJECT)
-  const [protection, setProtection] = useState(saved?.protection || INITIAL_PROTECTION)
-  const [workData, setWorkData] = useState(saved?.workData || getInitialWorkData())
-  const [materials, setMaterials] = useState(saved?.materials || INITIAL_MATERIALS)
+  const [project, setProject] = useState(INITIAL_PROJECT)
+  const [protection, setProtection] = useState(INITIAL_PROTECTION)
+  const [workData, setWorkData] = useState(getInitialWorkData())
+  const [materials, setMaterials] = useState(INITIAL_MATERIALS)
+
+  const loadSchedulesRef = useCallback(async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const data = await fetchSchedules()
+      setSchedules(data)
+      setDbConnected(true)
+    } catch (err) {
+      console.error('Failed to load schedules:', err)
+      setDbConnected(false)
+      setError('Could not connect to server. Working offline with local storage.')
+      const saved = localStorage.getItem('renovation-schedule')
+      if (saved) {
+        const local = JSON.parse(saved)
+        setSchedules(local.list || [])
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    const state = { project, protection, workData, materials }
-    localStorage.setItem('renovation-schedule', JSON.stringify(state))
-  }, [project, protection, workData, materials])
+    let cancelled = false
+    async function init() {
+      try {
+        const data = await fetchSchedules()
+        if (!cancelled) {
+          setSchedules(data)
+          setDbConnected(true)
+          setLoading(false)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error('Failed to load schedules:', err)
+          setDbConnected(false)
+          setError('Could not connect to server. Working offline with local storage.')
+          const saved = localStorage.getItem('renovation-schedule')
+          if (saved) {
+            const local = JSON.parse(saved)
+            setSchedules(local.list || [])
+          }
+          setLoading(false)
+        }
+      }
+    }
+    init()
+    return () => { cancelled = true }
+  }, [])
+
+  const applyScheduleData = (data) => {
+    setProject(data.project || INITIAL_PROJECT)
+    setProtection(data.protection || INITIAL_PROTECTION)
+    const wd = data.workData || {}
+    const merged = getInitialWorkData()
+    Object.keys(wd).forEach((key) => {
+      if (merged[key]) {
+        merged[key] = { ...merged[key], ...wd[key] }
+      }
+    })
+    setWorkData(merged)
+    setMaterials(
+      (data.materials || []).map((m, i) => ({ ...m, id: i + 1 }))
+    )
+    setCurrentId(data._id)
+    setView('edit')
+    setActiveTab('info')
+  }
+
+  const loadScheduleDetail = async (id) => {
+    try {
+      setLoading(true)
+      const data = await fetchSchedule(id)
+      applyScheduleData(data)
+    } catch (err) {
+      console.error('Failed to load schedule from server:', err)
+      const saved = localStorage.getItem('renovation-schedule')
+      if (saved) {
+        const local = JSON.parse(saved)
+        const match = (local.list || []).find((s) => s._id === id)
+        if (match) {
+          applyScheduleData(match)
+        } else {
+          setError('Failed to load project details')
+        }
+      } else {
+        setError('Failed to load project details')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const saveToLocal = (id) => {
+    const saved = localStorage.getItem('renovation-schedule')
+    const data = saved ? JSON.parse(saved) : { list: [] }
+    if (!data.list) data.list = []
+
+    const entryId = id || currentId || `local-${Date.now()}`
+    const entry = {
+      _id: entryId,
+      project,
+      protection,
+      workData,
+      materials: materials.map(({ name, quantity, unit }) => ({ name, quantity, unit })),
+      createdAt: new Date().toISOString(),
+    }
+
+    const idx = data.list.findIndex((s) => s._id === entryId)
+    if (idx >= 0) {
+      data.list[idx] = { ...data.list[idx], ...entry }
+    } else {
+      data.list.push(entry)
+    }
+
+    localStorage.setItem('renovation-schedule', JSON.stringify(data))
+    return entryId
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    setError(null)
+    const payload = {
+      project,
+      protection,
+      workData,
+      materials: materials.map(({ name, quantity, unit }) => ({ name, quantity, unit })),
+    }
+
+    let savedId = currentId
+    try {
+      if (dbConnected) {
+        if (currentId) {
+          await updateSchedule(currentId, payload)
+        } else {
+          const created = await createSchedule(payload)
+          savedId = created._id
+          setCurrentId(created._id)
+        }
+      }
+      saveToLocal(savedId)
+      await loadSchedulesRef()
+    } catch (err) {
+      console.error('Failed to save:', err)
+      const localId = saveToLocal(savedId)
+      if (!currentId) setCurrentId(localId)
+      setError('Saved locally. Server sync failed — will retry next time.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const deleteFromLocal = (id) => {
+    const saved = localStorage.getItem('renovation-schedule')
+    if (saved) {
+      const data = JSON.parse(saved)
+      data.list = (data.list || []).filter((s) => s._id !== id)
+      localStorage.setItem('renovation-schedule', JSON.stringify(data))
+    }
+  }
+
+  const handleDelete = async (id) => {
+    try {
+      if (dbConnected) {
+        await deleteSchedule(id)
+      }
+      deleteFromLocal(id)
+      await loadSchedulesRef()
+    } catch (err) {
+      console.error('Failed to delete:', err)
+      deleteFromLocal(id)
+      setError('Failed to delete from server. Removed locally.')
+      const saved = localStorage.getItem('renovation-schedule')
+      if (saved) {
+        const data = JSON.parse(saved)
+        setSchedules(data.list || [])
+      }
+    }
+  }
+
+  const handleNew = () => {
+    setProject(INITIAL_PROJECT)
+    setProtection(INITIAL_PROTECTION)
+    setWorkData(getInitialWorkData())
+    setMaterials(INITIAL_MATERIALS)
+    setCurrentId(null)
+    setView('edit')
+    setActiveTab('info')
+  }
+
+  const handleBack = () => {
+    setView('list')
+    loadSchedulesRef()
+  }
 
   const updateWork = (roomKey, fieldName, value) => {
     setWorkData((prev) => ({
@@ -187,12 +381,11 @@ function App() {
   }
 
   const handleClearAll = () => {
-    if (window.confirm('Clear all data? This cannot be undone.')) {
+    if (window.confirm('Clear all fields? This will reset the current form.')) {
       setProject(INITIAL_PROJECT)
       setProtection(INITIAL_PROTECTION)
       setWorkData(getInitialWorkData())
       setMaterials(INITIAL_MATERIALS)
-      localStorage.removeItem('renovation-schedule')
     }
   }
 
@@ -203,12 +396,53 @@ function App() {
     completed: ROOM_CONFIGS.filter((r) => workData[r.key]?.status === 'completed').length,
   }
 
+  if (view === 'list') {
+    return (
+      <div className="app">
+        <header className="app-header">
+          <div className="header-content">
+            <h1>Renovation Daily Schedule</h1>
+            <p className="header-subtitle">Project Work Tracker — MERN Stack</p>
+          </div>
+          <div className="header-stats">
+            <div className="stat-card stat-total">
+              <span className="stat-number">{schedules.length}</span>
+              <span className="stat-label">Projects</span>
+            </div>
+          </div>
+        </header>
+
+        {error && <div className="error-banner">{error}</div>}
+
+        <main className="main-content">
+          <ScheduleList
+            schedules={schedules}
+            loading={loading}
+            onSelect={loadScheduleDetail}
+            onDelete={handleDelete}
+            onCreate={handleNew}
+          />
+        </main>
+
+        <footer className="app-footer">
+          <span className="footer-note">
+            {dbConnected
+              ? 'Connected to MongoDB'
+              : 'Offline mode — data saved locally'}
+          </span>
+        </footer>
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       <header className="app-header">
         <div className="header-content">
           <h1>Renovation Daily Schedule</h1>
-          <p className="header-subtitle">Project Work Tracker</p>
+          <p className="header-subtitle">
+            {currentId ? 'Edit Project' : 'New Project'}
+          </p>
         </div>
         <div className="header-stats">
           <div className="stat-card stat-total">
@@ -231,6 +465,9 @@ function App() {
       </header>
 
       <nav className="tab-nav">
+        <button className="tab-btn back-btn" onClick={handleBack}>
+          &#8592; Back
+        </button>
         {TABS.map((tab) => (
           <button
             key={tab.key}
@@ -241,6 +478,8 @@ function App() {
           </button>
         ))}
       </nav>
+
+      {error && <div className="error-banner">{error}</div>}
 
       <main className="main-content">
         {activeTab === 'info' && (
@@ -280,10 +519,19 @@ function App() {
       </main>
 
       <footer className="app-footer">
-        <button className="btn-clear" onClick={handleClearAll}>
-          Clear All Data
-        </button>
-        <span className="footer-note">Data saved locally in your browser</span>
+        <div className="footer-left">
+          <button className="btn-clear" onClick={handleClearAll}>
+            Clear Form
+          </button>
+        </div>
+        <div className="footer-right">
+          <span className="footer-note">
+            {dbConnected ? 'MongoDB' : 'Offline'}
+          </span>
+          <button className="btn-save" onClick={handleSave} disabled={saving}>
+            {saving ? 'Saving...' : currentId ? 'Update Project' : 'Save Project'}
+          </button>
+        </div>
       </footer>
     </div>
   )
