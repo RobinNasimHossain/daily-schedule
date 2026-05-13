@@ -228,37 +228,73 @@ function App() {
     return () => { cancelled = true }
   }, [])
 
+  const applyScheduleData = (data) => {
+    setProject(data.project || INITIAL_PROJECT)
+    setProtection(data.protection || INITIAL_PROTECTION)
+    const wd = data.workData || {}
+    const merged = getInitialWorkData()
+    Object.keys(wd).forEach((key) => {
+      if (merged[key]) {
+        merged[key] = { ...merged[key], ...wd[key] }
+      }
+    })
+    setWorkData(merged)
+    setMaterials(
+      (data.materials || []).map((m, i) => ({ ...m, id: i + 1 }))
+    )
+    setCurrentId(data._id)
+    setView('edit')
+    setActiveTab('info')
+  }
+
   const loadScheduleDetail = async (id) => {
     try {
       setLoading(true)
       const data = await fetchSchedule(id)
-      setProject(data.project || INITIAL_PROJECT)
-      setProtection(data.protection || INITIAL_PROTECTION)
-      const wd = data.workData || {}
-      const merged = getInitialWorkData()
-      Object.keys(wd).forEach((key) => {
-        if (merged[key]) {
-          merged[key] = { ...merged[key], ...wd[key] }
-        }
-      })
-      setWorkData(merged)
-      setMaterials(
-        (data.materials || []).map((m, i) => ({ ...m, id: i + 1 }))
-      )
-      setCurrentId(data._id)
-      setView('edit')
-      setActiveTab('info')
+      applyScheduleData(data)
     } catch (err) {
-      console.error('Failed to load schedule:', err)
-      setError('Failed to load project details')
+      console.error('Failed to load schedule from server:', err)
+      const saved = localStorage.getItem('renovation-schedule')
+      if (saved) {
+        const local = JSON.parse(saved)
+        const match = (local.list || []).find((s) => s._id === id)
+        if (match) {
+          applyScheduleData(match)
+        } else {
+          setError('Failed to load project details')
+        }
+      } else {
+        setError('Failed to load project details')
+      }
     } finally {
       setLoading(false)
     }
   }
 
-  const saveToLocal = () => {
-    const state = { project, protection, workData, materials }
-    localStorage.setItem('renovation-schedule', JSON.stringify(state))
+  const saveToLocal = (id) => {
+    const saved = localStorage.getItem('renovation-schedule')
+    const data = saved ? JSON.parse(saved) : { list: [] }
+    if (!data.list) data.list = []
+
+    const entryId = id || currentId || `local-${Date.now()}`
+    const entry = {
+      _id: entryId,
+      project,
+      protection,
+      workData,
+      materials: materials.map(({ name, quantity, unit }) => ({ name, quantity, unit })),
+      createdAt: new Date().toISOString(),
+    }
+
+    const idx = data.list.findIndex((s) => s._id === entryId)
+    if (idx >= 0) {
+      data.list[idx] = { ...data.list[idx], ...entry }
+    } else {
+      data.list.push(entry)
+    }
+
+    localStorage.setItem('renovation-schedule', JSON.stringify(data))
+    return entryId
   }
 
   const handleSave = async () => {
@@ -271,23 +307,35 @@ function App() {
       materials: materials.map(({ name, quantity, unit }) => ({ name, quantity, unit })),
     }
 
+    let savedId = currentId
     try {
       if (dbConnected) {
         if (currentId) {
           await updateSchedule(currentId, payload)
         } else {
           const created = await createSchedule(payload)
+          savedId = created._id
           setCurrentId(created._id)
         }
       }
-      saveToLocal()
+      saveToLocal(savedId)
       await loadSchedulesRef()
     } catch (err) {
       console.error('Failed to save:', err)
-      saveToLocal()
+      const localId = saveToLocal(savedId)
+      if (!currentId) setCurrentId(localId)
       setError('Saved locally. Server sync failed — will retry next time.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const deleteFromLocal = (id) => {
+    const saved = localStorage.getItem('renovation-schedule')
+    if (saved) {
+      const data = JSON.parse(saved)
+      data.list = (data.list || []).filter((s) => s._id !== id)
+      localStorage.setItem('renovation-schedule', JSON.stringify(data))
     }
   }
 
@@ -296,10 +344,17 @@ function App() {
       if (dbConnected) {
         await deleteSchedule(id)
       }
+      deleteFromLocal(id)
       await loadSchedulesRef()
     } catch (err) {
       console.error('Failed to delete:', err)
-      setError('Failed to delete project')
+      deleteFromLocal(id)
+      setError('Failed to delete from server. Removed locally.')
+      const saved = localStorage.getItem('renovation-schedule')
+      if (saved) {
+        const data = JSON.parse(saved)
+        setSchedules(data.list || [])
+      }
     }
   }
 
