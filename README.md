@@ -1,16 +1,104 @@
-# React + Vite
+# Renovation Daily Schedule - MERN Stack
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A full-stack MERN (MongoDB, Express, React, Node.js) application for managing renovation project daily work schedules. Built for construction teams to track work progress across rooms, manage materials, and generate print-ready reports.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Project Info** - Track client details, company, address, lock code, and project type
+- **Protection Tracking** - Floor protection, plywood, PVC door protection
+- **Work Schedule** - Room-by-room task management with status tracking (Pending / In Progress / Completed)
+  - Hacking/Removal, Living Room, Kitchen, Maid Room/Balcony, Walkway, Room 1, Room 2, Master Bedroom, Misc
+- **Materials List** - Track protection pads, painter tape, plywood, PVC and custom materials
+- **Schedule List** - Browse, search, duplicate, and delete saved schedules
+- **Print View** - Print-optimized layout for physical reports
+- **MongoDB Persistence** - All data stored in MongoDB Atlas
 
-## React Compiler
+## Tech Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Frontend**: React 19, Vite, CSS
+- **Backend**: Express 5, Node.js
+- **Database**: MongoDB with Mongoose ODM
 
-## Expanding the ESLint configuration
+## Setup
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### Prerequisites
+
+- Node.js 18+
+- MongoDB Atlas account (or local MongoDB)
+
+### Installation
+
+```bash
+npm install
+```
+
+### Environment Variables
+
+Copy `.env.example` to `.env` and set your MongoDB URI:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+
+```
+MONGODB_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/renovation-schedule
+PORT=5000
+```
+
+### Development
+
+```bash
+npm run dev
+```
+
+This runs both the Express server (port 5000) and Vite dev server (port 5173) concurrently.
+
+### Production Build
+
+```bash
+npm run build
+npm start
+```
+
+## Project Structure
+
+```
+daily-schedule/
+├── server/
+│   ├── config/db.js          # MongoDB connection
+│   ├── models/Schedule.js    # Mongoose schema
+│   ├── routes/schedules.js   # REST API routes
+│   ├── middleware/errorHandler.js
+│   └── index.js              # Express server
+├── src/
+│   ├── api/scheduleApi.js    # Frontend API service
+│   ├── components/
+│   │   ├── ProjectInfo.jsx
+│   │   ├── ProtectionForm.jsx
+│   │   ├── WorkSection.jsx
+│   │   ├── MaterialsList.jsx
+│   │   ├── ScheduleList.jsx
+│   │   ├── ScheduleView.jsx
+│   │   └── Toast.jsx
+│   ├── App.jsx
+│   ├── App.css
+│   └── main.jsx
+├── .env.example
+├── package.json
+└── vite.config.js
+```
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/schedules` | List all schedules |
+| GET | `/api/schedules/:id` | Get single schedule |
+| POST | `/api/schedules` | Create schedule |
+| PUT | `/api/schedules/:id` | Update schedule |
+| DELETE | `/api/schedules/:id` | Delete schedule |
+| PATCH | `/api/schedules/:id/work/:roomKey` | Update room work data |
+| POST | `/api/schedules/:id/duplicate` | Duplicate schedule |
+| GET | `/api/health` | Health check |
